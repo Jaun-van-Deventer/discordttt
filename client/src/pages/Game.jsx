@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
+  connectSocket,
+  disconnectSocket,
   getSocket,
   onRoomUpdateListener,
   onInvalidMoveListener,
@@ -10,28 +12,26 @@ import {
   leaveRoom,
 } from '../utils/socket'
 
-export default function Game({ roomId, user, onLeaveGame }) {
+export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) {
   const [roomState, setRoomState] = useState(null)
   const [playerSymbol, setPlayerSymbol] = useState(null)
-  const [gameStatus, setGameStatus] = useState('Joining game...')
   const [roomFull, setRoomFull] = useState(false)
   const [opponentLeft, setOpponentLeft] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
 
   useEffect(() => {
-    // Set up socket event listeners
+    // Register all event listeners first, then connect the socket.
+    // This prevents the race condition where 'roomUpdate' arrives before
+    // the listener is registered and gets silently dropped.
     onRoomUpdateListener((data) => {
       setRoomState(data)
-      
-      // Determine player symbol
+
+      // Determine player symbol from the updated player list
       if (data.players[0]?.socketId === getSocket()?.id) {
         setPlayerSymbol('X')
       } else if (data.players[1]?.socketId === getSocket()?.id) {
         setPlayerSymbol('O')
       }
-
-      // Update game status message
-      updateGameStatus(data)
     })
 
     onInvalidMoveListener((reason) => {
@@ -41,37 +41,35 @@ export default function Game({ roomId, user, onLeaveGame }) {
 
     onOpponentLeftListener(() => {
       setOpponentLeft(true)
-      setGameStatus('Opponent left the game')
     })
 
     onRoomFullListener(() => {
       setRoomFull(true)
-      setGameStatus('Room is full')
     })
 
-    return () => {
-      // Cleanup is handled by disconnect
-    }
-  }, [])
+    // Connect only after all listeners are registered
+    connectSocket(roomId, onConnectionChange)
 
-  function updateGameStatus(data) {
-    if (data.gameStatus === 'waiting') {
-      setGameStatus('Waiting for opponent...')
-    } else if (data.gameStatus === 'playing') {
-      if (data.currentTurn === playerSymbol) {
-        setGameStatus('Your turn')
-      } else {
-        setGameStatus("Opponent's turn")
-      }
-    } else if (data.gameStatus === 'ended') {
-      if (data.winner === playerSymbol) {
-        setGameStatus('You won!')
-      } else if (data.winner === null) {
-        setGameStatus("It's a draw!")
-      } else {
-        setGameStatus('You lost!')
-      }
+    return () => {
+      disconnectSocket()
     }
+  }, [roomId, onConnectionChange])
+
+  // Derive the game status message at render time to avoid stale closures
+  function getGameStatus() {
+    if (opponentLeft) return 'Opponent left the game'
+    if (roomFull) return 'Room is full'
+    if (!roomState) return 'Joining game...'
+    if (roomState.gameStatus === 'waiting') return 'Waiting for opponent...'
+    if (roomState.gameStatus === 'playing') {
+      return roomState.currentTurn === playerSymbol ? 'Your turn' : "Opponent's turn"
+    }
+    if (roomState.gameStatus === 'ended') {
+      if (roomState.winner === playerSymbol) return 'You won!'
+      if (roomState.winner === null) return "It's a draw!"
+      return 'You lost!'
+    }
+    return ''
   }
 
   function handleCellClick(index) {
@@ -117,6 +115,7 @@ export default function Game({ roomId, user, onLeaveGame }) {
     )
   }
 
+  const gameStatus = getGameStatus()
   const canMove = !opponentLeft && playerSymbol === roomState.currentTurn && roomState.gameStatus === 'playing'
   const gameEnded = roomState.gameStatus === 'ended'
 
