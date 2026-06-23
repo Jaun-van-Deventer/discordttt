@@ -4,7 +4,6 @@
 
 
   updateUI();
-}
 
 function makeMove(index) {
   if (!gameState.gameActive) return;
