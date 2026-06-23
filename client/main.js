@@ -1,10 +1,11 @@
-import { DiscordSDK } from "@discord/embedded-app-sdk";
+import { DiscordSDK, Events } from "@discord/embedded-app-sdk";
+import { io } from "socket.io-client";
+
 import "./style.css";
 
 let auth;
-let currentUser;
-let roomId;
-let pollIntervalId;
+let socket;
+
 const discordSdk = new DiscordSDK(import.meta.env.VITE_DISCORD_CLIENT_ID);
 
 // Game state
@@ -20,36 +21,206 @@ function generateRoomId() {
   return `${discordSdk.channelId}_${discordSdk.guildId || 'dm'}`;
 }
 
-async function gameRequest(path, body) {
-  const response = await fetch(`/.proxy/api/game/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+// --------------------
+// Game State
+// --------------------
+let board = Array(9).fill(null);
+let currentPlayer = "X";
+let gameOver = false;
+let winner = null;
+let participants = [];
+let players = [];
+let spectators = [];
+let playerSymbol = null;
+let socketConnected = false;
+
+function isGameReady() {
+  return players.length === 2;
+}
+
+function displayName(participant) {
+  return (
+    participant.name ||
+    participant.global_name ||
+    participant.nickname ||
+    participant.username ||
+    "Player"
+  );
+}
+
+// --------------------
+// UI Rendering
+// --------------------
+function renderBoard() {
+  const app = document.querySelector("#app");
+
+  const gameReady = isGameReady();
+  const isMyTurn = gameReady && playerSymbol === currentPlayer && !gameOver;
+
+  let statusText = socketConnected
+    ? `Waiting for another player (${players.length}/2)`
+    : "Connecting to game server";
+
+  if (winner === "X" || winner === "O") {
+    statusText = `${winner} wins`;
+  } else if (winner === "draw") {
+    statusText = `Draw`;
+  } else if (gameReady && playerSymbol) {
+    statusText = isMyTurn
+      ? `Your turn (${playerSymbol})`
+      : `Turn: ${currentPlayer}`;
+  } else if (gameReady) {
+    statusText = `Spectating: ${currentPlayer}'s turn`;
+  }
+
+  app.innerHTML = `
+    <div class="game">
+      <h1>Tic Tac Toe</h1>
+      <p>${statusText}</p>
+      <p class="players">
+        Players: ${
+          players.length ? players.map(formatPlayer).join(" vs ") : "None yet"
+        }
+      </p>
+      <p class="players">
+        Activity: ${
+          participants.length
+            ? participants.slice(0, 6).map(displayName).join(", ")
+            : "Only you so far"
+        }
+      </p>
+
+      <div class="board">
+        ${board
+          .map(
+            (cell, i) => `
+            <button class="cell" data-index="${i}" ${
+              isMyTurn && !cell ? "" : "disabled"
+            }>
+              ${cell ?? ""}
+            </button>
+          `
+          )
+          .join("")}
+      </div>
+
+      <button id="reset">Reset</button>
+    </div>
+  `;
+
+  document.querySelectorAll(".cell").forEach((btn) => {
+    btn.addEventListener("click", onCellClick);
   });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Game request failed: ${response.status}`);
+  document.querySelector("#reset").addEventListener("click", resetGame);
+}
+
+function formatPlayer(player) {
+  return `${displayName(player)} (${player.symbol})`;
+}
+
+// --------------------
+// Game Actions
+// --------------------
+function onCellClick(e) {
+  const index = Number(e.target.dataset.index);
+
+  if (!socket || !isGameReady() || board[index] || gameOver) return;
+
+  socket.emit("makeMove", { index });
+}
+
+async function fetchAccessToken(code) {
+  const tokenPaths = ["/.proxy/api/token", "/api/token"];
+
+  for (const path of tokenPaths) {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ code }),
+    });
+
+    if (response.ok) {
+      return response.json();
+    }
   }
 
-  return response.json();
+  throw new Error("Failed to exchange Discord authorization code");
 }
 
-function applyGameState(nextGameState) {
-  gameState = nextGameState;
-  updateUI();
+function updateParticipants(nextParticipants) {
+  participants = nextParticipants;
+  console.log("Activity participants updated", participants);
+  renderBoard();
 }
 
-async function refreshGameState() {
-  if (!roomId) return;
+async function setupParticipantTracking() {
+  const connected =
+    await discordSdk.commands.getActivityInstanceConnectedParticipants();
 
-  try {
-    applyGameState(await gameRequest("room", { roomId }));
-  } catch (error) {
-    console.error("Failed to refresh game state", error);
-  }
+  updateParticipants(connected.participants);
+
+  await discordSdk.subscribe(
+    Events.ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE,
+    ({ participants: updatedParticipants }) => {
+      updateParticipants(updatedParticipants);
+    }
+  );
 }
 
+function resetGame() {
+  socket?.emit("resetGame");
+}
+
+function getSocketPath() {
+  return import.meta.env.DEV ? "/socket.io" : "/.proxy/socket.io";
+}
+
+function applyGameState(state) {
+  board = state.board;
+  currentPlayer = state.currentPlayer;
+  gameOver = state.gameOver;
+  winner = state.winner;
+  players = state.players;
+  spectators = state.spectators;
+  playerSymbol =
+    players.find((player) => player.id === auth.user.id)?.symbol || null;
+
+  renderBoard();
+}
+
+function setupSocket() {
+  socket = io({
+    path: getSocketPath(),
+    transports: ["websocket", "polling"],
+  });
+
+  socket.on("connect", () => {
+    socketConnected = true;
+    socket.emit("joinGame", {
+      roomId: discordSdk.instanceId || discordSdk.channelId,
+      user: {
+        id: auth.user.id,
+        username: auth.user.username,
+        name: auth.user.global_name || auth.user.username,
+      },
+    });
+    renderBoard();
+  });
+
+  socket.on("disconnect", () => {
+    socketConnected = false;
+    renderBoard();
+  });
+
+  socket.on("gameState", applyGameState);
+}
+
+// --------------------
+// Discord SDK Setup
+// --------------------
 async function setupDiscordSdk() {
   await discordSdk.ready();
   console.log("Discord SDK is ready");
@@ -62,91 +233,7 @@ async function setupDiscordSdk() {
     scope: ["identify", "guilds"],
   });
 
-  const response = await fetch("/.proxy/api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
-  const { access_token } = await response.json();
-
-  auth = await discordSdk.commands.authenticate({ access_token });
-  if (auth == null) throw new Error("Authenticate command failed");
-
-  currentUser = auth.user;
-  roomId = generateRoomId();
-}
-
-async function assignPlayer() {
-  try {
-    applyGameState(await gameRequest("join", { roomId, userId: currentUser.id }));
-  } catch (error) {
-    console.error("Failed to join game room", error);
-  }
-}
-
-function isRoomLeader() {
-  return gameState.players.X === currentUser.id;
-}
-
-function getCurrentPlayerSymbol() {
-  if (gameState.players.X === currentUser.id) return 'X';
-  if (gameState.players.O === currentUser.id) return 'O';
-  return null;
-}
-
-function checkWinner(board) {
-  const lines = [
-    [0, 1, 2],
-    [3, 4, 5],
-    [6, 7, 8],
-    [0, 3, 6],
-    [1, 4, 7],
-    [2, 5, 8],
-    [0, 4, 8],
-    [2, 4, 6],
-  ];
-
-  for (let i = 0; i < lines.length; i++) {
-    const [a, b, c] = lines[i];
-    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-      return board[a];
-    }
-  }
-  return null;
-}
-
-function isBoardFull(board) {
-  return board.every((cell) => cell !== null);
-}
-
-async function startGame() {
-  if (!isRoomLeader()) return;
-
-  try {
-    applyGameState(await gameRequest("reset", { roomId, userId: currentUser.id }));
-  } catch (error) {
-    console.error("Failed to start game", error);
-  }
-}
-
-async function makeMove(index) {
-  if (!gameState.gameActive) return;
-  if (gameState.board[index] !== null) return;
-
-  const playerSymbol = getCurrentPlayerSymbol();
-  if (playerSymbol !== gameState.currentPlayer) return;
-
-  try {
-    applyGameState(await gameRequest("move", {
-      roomId,
-      index,
-      player: playerSymbol,
-      userId: currentUser.id,
-    }));
-  } catch (error) {
-    console.error("Failed to make move", error);
-  }
-}
+  const { access_token } = await fetchAccessToken(code);
 
 function rematch() {
   if (!isRoomLeader()) return;
@@ -228,6 +315,10 @@ function updateUI() {
     startBtn.style.display = 'none';
   }
 
+  await setupParticipantTracking();
+  setupSocket();
+}
+
   if (isRoomLeader() && !gameState.gameActive && gameState.players.X && gameState.players.O && gameFinished) {
     rematchBtn.style.display = 'block';
   } else {
@@ -256,10 +347,7 @@ document.getElementById('rematch-btn').addEventListener('click', rematch);
 
 // Initialize
 setupDiscordSdk().then(() => {
-  console.log("Discord SDK authenticated", currentUser);
-  assignPlayer();
-  pollIntervalId = window.setInterval(refreshGameState, 1000);
-  window.addEventListener("beforeunload", () => {
-    window.clearInterval(pollIntervalId);
-  });
+  console.log("Discord SDK authenticated");
+
+  renderBoard();
 });
