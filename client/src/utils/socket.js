@@ -35,6 +35,11 @@ export function connectSocket(roomId, onConnectionChange) {
     reconnectionAttempts: 5,
   })
   socket = localSocket
+  // Note: the module-level `socket` is kept in sync so that `getSocket()`
+  // always returns the current active socket for callers that need its `.id`
+  // (e.g. Game.jsx player-symbol detection). All event handler emissions use
+  // `localSocket` directly, so they are safe even if `socket` is later set to
+  // null by a cleanup call.
 
   localSocket.on('connect', () => {
     console.log('Connected to server')
