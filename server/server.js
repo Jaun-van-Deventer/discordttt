@@ -12,6 +12,22 @@ app.use(express.json());
 // Store active game rooms
 const gameRooms = new Map();
 
+function createGameRoom() {
+  return {
+    board: Array(9).fill(null),
+    currentPlayer: 'X',
+    players: { X: null, O: null },
+    gameActive: false,
+    winner: null,
+  };
+}
+
+function getPlayerSymbol(room, userId) {
+  if (room.players.X === userId) return 'X';
+  if (room.players.O === userId) return 'O';
+  return null;
+}
+
 app.post("/api/token", async (req, res) => {
   
   // Exchange the code for an access_token
@@ -40,13 +56,7 @@ app.post("/api/game/room", (req, res) => {
   const { roomId } = req.body;
   
   if (!gameRooms.has(roomId)) {
-    gameRooms.set(roomId, {
-      board: Array(9).fill(null),
-      currentPlayer: 'X',
-      players: { X: null, O: null },
-      gameActive: false,
-      winner: null,
-    });
+    gameRooms.set(roomId, createGameRoom());
   }
   
   res.json(gameRooms.get(roomId));
@@ -54,13 +64,18 @@ app.post("/api/game/room", (req, res) => {
 
 // Update game state
 app.post("/api/game/move", (req, res) => {
-  const { roomId, index, player } = req.body;
+  const { roomId, index, player, userId } = req.body;
   
   if (!gameRooms.has(roomId)) {
     return res.status(404).json({ error: "Room not found" });
   }
   
   const room = gameRooms.get(roomId);
+  const playerSymbol = getPlayerSymbol(room, userId);
+  
+  if (playerSymbol !== player || playerSymbol !== room.currentPlayer) {
+    return res.status(400).json({ error: "Not your turn" });
+  }
   
   if (room.board[index] !== null || !room.gameActive) {
     return res.status(400).json({ error: "Invalid move" });
@@ -97,13 +112,22 @@ app.post("/api/game/move", (req, res) => {
 
 // Reset game (rematch)
 app.post("/api/game/reset", (req, res) => {
-  const { roomId } = req.body;
+  const { roomId, userId } = req.body;
   
   if (!gameRooms.has(roomId)) {
     return res.status(404).json({ error: "Room not found" });
   }
   
   const room = gameRooms.get(roomId);
+  
+  if (room.players.X !== userId) {
+    return res.status(403).json({ error: "Only the room leader can start the game" });
+  }
+  
+  if (!room.players.X || !room.players.O) {
+    return res.status(400).json({ error: "Need two players to start the game" });
+  }
+  
   room.board = Array(9).fill(null);
   room.currentPlayer = 'X';
   room.gameActive = true;
@@ -117,13 +141,7 @@ app.post("/api/game/join", (req, res) => {
   const { roomId, userId } = req.body;
   
   if (!gameRooms.has(roomId)) {
-    gameRooms.set(roomId, {
-      board: Array(9).fill(null),
-      currentPlayer: 'X',
-      players: { X: null, O: null },
-      gameActive: false,
-      winner: null,
-    });
+    gameRooms.set(roomId, createGameRoom());
   }
   
   const room = gameRooms.get(roomId);

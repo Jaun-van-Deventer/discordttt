@@ -3,6 +3,8 @@ import "./style.css";
 
 let auth;
 let currentUser;
+let roomId;
+let pollIntervalId;
 const discordSdk = new DiscordSDK(import.meta.env.VITE_DISCORD_CLIENT_ID);
 
 // Game state
@@ -14,10 +16,38 @@ let gameState = {
   winner: null,
 };
 
-const roomId = generateRoomId();
-
 function generateRoomId() {
   return `${discordSdk.channelId}_${discordSdk.guildId || 'dm'}`;
+}
+
+async function gameRequest(path, body) {
+  const response = await fetch(`/.proxy/api/game/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error || `Game request failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function applyGameState(nextGameState) {
+  gameState = nextGameState;
+  updateUI();
+}
+
+async function refreshGameState() {
+  if (!roomId) return;
+
+  try {
+    applyGameState(await gameRequest("room", { roomId }));
+  } catch (error) {
+    console.error("Failed to refresh game state", error);
+  }
 }
 
 async function setupDiscordSdk() {
@@ -43,17 +73,15 @@ async function setupDiscordSdk() {
   if (auth == null) throw new Error("Authenticate command failed");
 
   currentUser = auth.user;
+  roomId = generateRoomId();
 }
 
-function assignPlayer() {
-  if (gameState.players.X === null) {
-    gameState.players.X = currentUser.id;
-    return 'X';
-  } else if (gameState.players.O === null) {
-    gameState.players.O = currentUser.id;
-    return 'O';
+async function assignPlayer() {
+  try {
+    applyGameState(await gameRequest("join", { roomId, userId: currentUser.id }));
+  } catch (error) {
+    console.error("Failed to join game room", error);
   }
-  return null;
 }
 
 function isRoomLeader() {
@@ -91,37 +119,33 @@ function isBoardFull(board) {
   return board.every((cell) => cell !== null);
 }
 
-function startGame() {
+async function startGame() {
   if (!isRoomLeader()) return;
 
-  gameState.board = Array(9).fill(null);
-  gameState.currentPlayer = 'X';
-  gameState.gameActive = true;
-  gameState.winner = null;
-
-  updateUI();
+  try {
+    applyGameState(await gameRequest("reset", { roomId, userId: currentUser.id }));
+  } catch (error) {
+    console.error("Failed to start game", error);
+  }
 }
 
-function makeMove(index) {
+async function makeMove(index) {
   if (!gameState.gameActive) return;
   if (gameState.board[index] !== null) return;
 
   const playerSymbol = getCurrentPlayerSymbol();
   if (playerSymbol !== gameState.currentPlayer) return;
 
-  gameState.board[index] = gameState.currentPlayer;
-
-  const winner = checkWinner(gameState.board);
-  if (winner) {
-    gameState.winner = winner;
-    gameState.gameActive = false;
-  } else if (isBoardFull(gameState.board)) {
-    gameState.gameActive = false;
-  } else {
-    gameState.currentPlayer = gameState.currentPlayer === 'X' ? 'O' : 'X';
+  try {
+    applyGameState(await gameRequest("move", {
+      roomId,
+      index,
+      player: playerSymbol,
+      userId: currentUser.id,
+    }));
+  } catch (error) {
+    console.error("Failed to make move", error);
   }
-
-  updateUI();
 }
 
 function rematch() {
@@ -130,6 +154,11 @@ function rematch() {
 }
 
 function updateUI() {
+  const playerSymbol = getCurrentPlayerSymbol();
+  const isCurrentUsersTurn = gameState.currentPlayer === playerSymbol;
+  const boardHasMoves = gameState.board.some((cell) => cell !== null);
+  const gameFinished = Boolean(gameState.winner) || isBoardFull(gameState.board);
+
   // Update board
   const cells = document.querySelectorAll('.cell');
   cells.forEach((cell, index) => {
@@ -138,7 +167,7 @@ function updateUI() {
     cell.className = 'cell';
     if (value === 'X') cell.classList.add('x');
     if (value === 'O') cell.classList.add('o');
-    cell.disabled = !gameState.gameActive || gameState.board[index] !== null;
+    cell.disabled = !gameState.gameActive || !isCurrentUsersTurn || gameState.board[index] !== null;
   });
 
   // Update player info
@@ -185,19 +214,21 @@ function updateUI() {
       ? (gameState.players.X === currentUser.id ? 'Your' : "Opponent's")
       : (gameState.players.O === currentUser.id ? 'Your' : "Opponent's");
     statusDiv.textContent = `${currentName} turn (${gameState.currentPlayer})`;
+  } else {
+    statusDiv.textContent = isRoomLeader() ? 'Ready to start.' : 'Waiting for room leader to start...';
   }
 
   // Update button visibility
   const startBtn = document.getElementById('start-btn');
   const rematchBtn = document.getElementById('rematch-btn');
 
-  if (isRoomLeader() && !gameState.gameActive && (!gameState.players.X || !gameState.players.O)) {
+  if (isRoomLeader() && !gameState.gameActive && gameState.players.X && gameState.players.O && !boardHasMoves && !gameState.winner) {
     startBtn.style.display = 'block';
   } else {
     startBtn.style.display = 'none';
   }
 
-  if (isRoomLeader() && !gameState.gameActive && gameState.players.X && gameState.players.O) {
+  if (isRoomLeader() && !gameState.gameActive && gameState.players.X && gameState.players.O && gameFinished) {
     rematchBtn.style.display = 'block';
   } else {
     rematchBtn.style.display = 'none';
@@ -227,5 +258,8 @@ document.getElementById('rematch-btn').addEventListener('click', rematch);
 setupDiscordSdk().then(() => {
   console.log("Discord SDK authenticated", currentUser);
   assignPlayer();
-  updateUI();
+  pollIntervalId = window.setInterval(refreshGameState, 1000);
+  window.addEventListener("beforeunload", () => {
+    window.clearInterval(pollIntervalId);
+  });
 });
