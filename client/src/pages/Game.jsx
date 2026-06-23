@@ -7,6 +7,7 @@ import {
   onInvalidMoveListener,
   onOpponentLeftListener,
   onRoomFullListener,
+  onConnectErrorListener,
   makeMove,
   requestRematch,
   leaveRoom,
@@ -18,6 +19,7 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
   const [roomFull, setRoomFull] = useState(false)
   const [opponentLeft, setOpponentLeft] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [connectError, setConnectError] = useState(false)
 
   useEffect(() => {
     // Register all event listeners first, then connect the socket.
@@ -25,6 +27,12 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
     // the listener is registered and gets silently dropped.
     onRoomUpdateListener((data) => {
       setRoomState(data)
+
+      // If two players are in the room, the game is active — clear any
+      // stale "opponent left" flag so the board becomes usable again.
+      if (data.players.length === 2) {
+        setOpponentLeft(false)
+      }
 
       // Determine player symbol from the updated player list
       if (data.players[0]?.socketId === getSocket()?.id) {
@@ -45,6 +53,10 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
 
     onRoomFullListener(() => {
       setRoomFull(true)
+    })
+
+    onConnectErrorListener(() => {
+      setConnectError(true)
     })
 
     // Connect only after all listeners are registered
@@ -98,6 +110,20 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
           <p>This room already has 2 players. Please try joining a different room.</p>
           <button className="btn btn-primary" onClick={handleLeave}>
             Leave
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (connectError) {
+    return (
+      <div className="page game-page">
+        <div className="container">
+          <h2>Connection Failed</h2>
+          <p>Could not connect to the game server. Please check your connection and try again.</p>
+          <button className="btn btn-primary" onClick={handleLeave}>
+            Go Back
           </button>
         </div>
       </div>

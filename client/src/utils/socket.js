@@ -5,48 +5,69 @@ let onRoomUpdate = null
 let onInvalidMove = null
 let onOpponentLeft = null
 let onRoomFull = null
+let onConnectError = null
 
 export function connectSocket(roomId, onConnectionChange) {
+  // Disconnect any existing socket before creating a new one to avoid
+  // orphaned connections and module-level variable confusion.
+  if (socket) {
+    socket.disconnect()
+    socket = null
+  }
+
   const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001'
   
-  socket = io(serverUrl, {
+  // Capture the socket in a local variable so that every event handler
+  // always references THIS socket instance, not whatever socket happens
+  // to be in the module-level variable at the time the event fires.
+  // Without this, React Strict Mode's double-invocation of effects can
+  // set socket = null (or a new socket) before the first socket's
+  // 'connect' event fires, causing null.emit() and a dropped joinRoom.
+  const localSocket = io(serverUrl, {
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
     reconnectionAttempts: 5,
   })
+  socket = localSocket
 
-  socket.on('connect', () => {
+  localSocket.on('connect', () => {
     console.log('Connected to server')
     onConnectionChange && onConnectionChange('connected')
-    socket.emit('joinRoom', { roomId })
+    localSocket.emit('joinRoom', { roomId })
   })
 
-  socket.on('disconnect', () => {
+  localSocket.on('disconnect', () => {
     console.log('Disconnected from server')
     onConnectionChange && onConnectionChange('disconnected')
   })
 
-  socket.on('roomFull', () => {
+  localSocket.on('connect_error', (error) => {
+    console.error('Socket connection error:', error.message)
+    onConnectionChange && onConnectionChange('error')
+    onConnectError && onConnectError(error.message)
+  })
+
+  localSocket.on('roomFull', () => {
     console.log('Room is full')
     onRoomFull && onRoomFull()
   })
 
-  socket.on('roomUpdate', (data) => {
+  localSocket.on('roomUpdate', (data) => {
     onRoomUpdate && onRoomUpdate(data)
   })
 
-  socket.on('invalidMove', (data) => {
+  localSocket.on('invalidMove', (data) => {
     console.log('Invalid move:', data.reason)
     onInvalidMove && onInvalidMove(data.reason)
   })
 
-  socket.on('opponentLeft', () => {
+  localSocket.on('opponentLeft', () => {
     console.log('Opponent left the game')
     onOpponentLeft && onOpponentLeft()
   })
 
-  socket.on('error', (error) => {
+  localSocket.on('error', (error) => {
     console.error('Socket error:', error)
   })
 }
@@ -76,6 +97,10 @@ export function onOpponentLeftListener(callback) {
 
 export function onRoomFullListener(callback) {
   onRoomFull = callback
+}
+
+export function onConnectErrorListener(callback) {
+  onConnectError = callback
 }
 
 export function makeMove(roomId, index) {
