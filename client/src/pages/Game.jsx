@@ -28,8 +28,10 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
     onRoomUpdateListener((data) => {
       setRoomState(data)
 
-      // If two players are in the room, the game is active — clear any
-      // stale "opponent left" flag so the board becomes usable again.
+      // If two players are now in the room, clear any stale "opponent left"
+      // flag regardless of whether it is the same or a new opponent. The flag
+      // exists only to prevent moves while the room is short-handed, so once
+      // there are 2 players the board should be active again.
       if (data.players.length === 2) {
         setOpponentLeft(false)
       }

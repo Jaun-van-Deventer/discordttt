@@ -23,7 +23,12 @@ export function connectSocket(roomId, onConnectionChange) {
   // Without this, React Strict Mode's double-invocation of effects can
   // set socket = null (or a new socket) before the first socket's
   // 'connect' event fires, causing null.emit() and a dropped joinRoom.
+  //
+  // autoConnect: false lets us register all handlers before the socket
+  // starts connecting, ensuring no events (including connect_error) can
+  // fire before their listeners are attached.
   const localSocket = io(serverUrl, {
+    autoConnect: false,
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
@@ -70,7 +75,9 @@ export function connectSocket(roomId, onConnectionChange) {
   localSocket.on('error', (error) => {
     console.error('Socket error:', error)
   })
-}
+
+  // Start connecting only after all handlers are registered.
+  localSocket.connect()
 
 export function disconnectSocket() {
   if (socket) {
