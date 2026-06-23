@@ -53,7 +53,7 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
     return () => {
       disconnectSocket()
     }
-  }, [])
+  }, [roomId, onConnectionChange])
 
   // Derive the game status message at render time to avoid stale closures
   function getGameStatus() {
