@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { initializeDiscordSDK, getDiscordUser, getRoomId } from './utils/discordSetup'
-import { connectSocket, disconnectSocket } from './utils/socket'
 import Home from './pages/Home'
 import Game from './pages/Game'
 import './index.css'
@@ -38,14 +37,12 @@ export default function App() {
 
   const handleNavigateToGame = () => {
     if (roomId) {
-      connectSocket(roomId, setConnectionStatus)
       setPage('game')
     }
   }
 
   const handleLeaveGame = () => {
-    disconnectSocket()
-    setConnectionStatus('connecting')
+    setConnectionStatus('ready')
     setPage('home')
   }
 
@@ -71,6 +68,7 @@ export default function App() {
           roomId={roomId} 
           user={user}
           onLeaveGame={handleLeaveGame}
+          onConnectionChange={setConnectionStatus}
         />
       )}
     </div>
