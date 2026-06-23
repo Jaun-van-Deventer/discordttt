@@ -30,7 +30,7 @@ export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) 
 
       // If two players are now in the room, clear any stale "opponent left"
       // flag regardless of whether it is the same or a new opponent. The flag
-      // exists only to prevent moves while the room is short-handed, so once
+      // exists only to prevent moves while the room is shorthanded, so once
       // there are 2 players the board should be active again.
       if (data.players.length === 2) {
         setOpponentLeft(false)

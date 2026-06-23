@@ -86,6 +86,7 @@ export function connectSocket(roomId, onConnectionChange) {
 
 export function disconnectSocket() {
   if (socket) {
+    socket.removeAllListeners()
     socket.disconnect()
     socket = null
   }
