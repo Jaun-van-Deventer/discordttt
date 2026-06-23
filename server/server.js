@@ -92,8 +92,15 @@ function removeSocketFromRoom(room, socketId) {
   }
 }
 
-// Allow express to parse JSON bodies
-app.use(express.json());
+function createGameRoom() {
+  return {
+    board: Array(9).fill(null),
+    currentPlayer: 'X',
+    players: { X: null, O: null },
+    gameActive: false,
+    winner: null,
+  };
+}
 
 app.post("/api/token", async (req, res) => {
   // Exchange the code for an access_token
