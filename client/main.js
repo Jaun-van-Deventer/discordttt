@@ -1,6 +1,6 @@
 import { DiscordSDK } from "@discord/embedded-app-sdk";
 
-const discordSdk = new DiscordSDK("YOUR_APP_ID");
+const discordSdk = new DiscordSDK("1519044740916445367");
 
 await discordSdk.ready();
 
