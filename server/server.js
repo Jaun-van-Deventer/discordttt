@@ -1,21 +1,31 @@
-import express from "express";
-import dotenv from "dotenv";
-import fetch from "node-fetch";
-import { createServer } from "node:http";
-import { Server } from "socket.io";
-dotenv.config({ path: "../.env" });
+import express from 'express'
+import { createServer } from 'http'
+import { Server } from 'socket.io'
+import cors from 'cors'
+import dotenv from 'dotenv'
 
-const app = express();
-const httpServer = createServer(app);
+dotenv.config()
+
+const app = express()
+const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: {
-    origin: "*",
+    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    methods: ['GET', 'POST'],
   },
-});
-const port = 3001;
-const rooms = new Map();
+})
 
-const winPatterns = [
+const port = process.env.PORT || 3001
+
+// Middleware
+app.use(express.json())
+app.use(cors())
+
+// Store game rooms
+const gameRooms = new Map()
+
+// Winning combinations
+const WINNING_COMBINATIONS = [
   [0, 1, 2],
   [3, 4, 5],
   [6, 7, 8],
@@ -24,210 +34,239 @@ const winPatterns = [
   [2, 5, 8],
   [0, 4, 8],
   [2, 4, 6],
-];
+]
 
-function createRoom() {
+// Helper Functions
+function createRoom(roomId) {
   return {
-    board: Array(9).fill(null),
-    currentPlayer: "X",
-    gameOver: false,
-    winner: null,
+    roomId,
     players: [],
-    spectators: [],
-  };
-}
-
-function resetRoomGame(room) {
-  room.board = Array(9).fill(null);
-  room.currentPlayer = "X";
-  room.gameOver = false;
-  room.winner = null;
+    board: Array(9).fill(null),
+    currentTurn: 'X',
+    gameStatus: 'waiting', // waiting, playing, ended
+    winner: null,
+    rematchVotes: {},
+    startingPlayer: 'X',
+  }
 }
 
 function checkWinner(board) {
-  for (const [a, b, c] of winPatterns) {
+  for (const [a, b, c] of WINNING_COMBINATIONS) {
     if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-      return board[a];
+      return board[a]
     }
   }
-
-  return board.includes(null) ? null : "draw";
+  return null
 }
 
-function getRoom(roomId) {
-  if (!rooms.has(roomId)) {
-    rooms.set(roomId, createRoom());
-  }
-
-  return rooms.get(roomId);
+function isBoardFull(board) {
+  return board.every((cell) => cell !== null)
 }
 
-function serializeRoom(room) {
-  return {
+function broadcastRoomUpdate(roomId) {
+  const room = gameRooms.get(roomId)
+  if (!room) return
+
+  const publicState = {
+    roomId,
+    players: room.players.map((p) => ({
+      socketId: p.socketId,
+      symbol: p.symbol,
+    })),
     board: room.board,
-    currentPlayer: room.currentPlayer,
-    gameOver: room.gameOver,
+    currentTurn: room.currentTurn,
+    gameStatus: room.gameStatus,
     winner: room.winner,
-    players: room.players.map(({ socketId, ...player }) => player),
-    spectators: room.spectators.map(({ socketId, ...spectator }) => spectator),
-    ready: room.players.length === 2,
-  };
+    rematchVotes: room.rematchVotes,
+  }
+
+  io.to(roomId).emit('roomUpdate', publicState)
 }
 
-function emitRoomState(roomId) {
-  const room = getRoom(roomId);
-  io.to(roomId).emit("gameState", serializeRoom(room));
-}
-
-function removeSocketFromRoom(room, socketId) {
-  const playerCountBefore = room.players.length;
-
-  room.players = room.players.filter((player) => player.socketId !== socketId);
-  room.spectators = room.spectators.filter(
-    (spectator) => spectator.socketId !== socketId
-  );
-
-  if (room.players.length < 2 && playerCountBefore === 2) {
-    resetRoomGame(room);
+function cleanupEmptyRoom(roomId) {
+  const room = gameRooms.get(roomId)
+  if (room && room.players.length === 0) {
+    gameRooms.delete(roomId)
+    console.log(`Room ${roomId} cleaned up`)
   }
 }
 
-function createGameRoom() {
-  return {
-    board: Array(9).fill(null),
-    currentPlayer: 'X',
-    players: { X: null, O: null },
-    gameActive: false,
-    winner: null,
-  };
-}
+// Routes
+app.get('/', (req, res) => {
+  res.send('Tic Tac Toe backend running')
+})
 
-app.post("/api/token", async (req, res) => {
-  // Exchange the code for an access_token
-  const response = await fetch(`https://discord.com/api/oauth2/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: process.env.VITE_DISCORD_CLIENT_ID,
-      client_secret: process.env.DISCORD_CLIENT_SECRET,
-      grant_type: "authorization_code",
-      code: req.body.code,
-    }),
-  });
+// Socket.IO Events
+io.on('connection', (socket) => {
+  console.log(`User connected: ${socket.id}`)
 
-  // Retrieve the access_token from the response
-  const { access_token } = await response.json();
+  socket.on('joinRoom', (data) => {
+    const { roomId } = data
 
-  // Return the access_token to our client as { access_token: "..."}
-  res.send({ access_token });
-});
+    // Get or create room
+    let room = gameRooms.get(roomId)
+    if (!room) {
+      room = createRoom(roomId)
+      gameRooms.set(roomId, room)
+    }
 
-io.on("connection", (socket) => {
-  let activeRoomId = null;
+    // Check if room is full
+    if (room.players.length >= 2) {
+      socket.emit('roomFull')
+      console.log(`User ${socket.id} tried to join full room ${roomId}`)
+      return
+    }
 
-  socket.on("joinGame", ({ roomId, user }) => {
-    if (!roomId || !user?.id) return;
-
-    activeRoomId = roomId;
-    socket.join(roomId);
-
-    const room = getRoom(roomId);
-    removeSocketFromRoom(room, socket.id);
-
-    const existingPlayer = room.players.find((player) => player.id === user.id);
-    const existingSpectator = room.spectators.find(
-      (spectator) => spectator.id === user.id
-    );
-
-    const participant = {
-      id: user.id,
-      name: user.name || user.username || "Player",
+    // Add player to room
+    const symbol = room.players.length === 0 ? 'X' : 'O'
+    room.players.push({
       socketId: socket.id,
-    };
+      symbol,
+    })
 
-    if (existingPlayer) {
-      existingPlayer.socketId = socket.id;
-      existingPlayer.name = participant.name;
-    } else if (existingSpectator) {
-      existingSpectator.socketId = socket.id;
-      existingSpectator.name = participant.name;
-    } else {
-      if (room.players.length < 2) {
-        room.players.push({
-          ...participant,
-          symbol: room.players.length === 0 ? "X" : "O",
-        });
-      } else {
-        room.spectators.push(participant);
+    // Join socket to room
+    socket.join(roomId)
+    socket.data.roomId = roomId
+    socket.data.symbol = symbol
+
+    console.log(`User ${socket.id} joined room ${roomId} as ${symbol}`)
+
+    // If 2 players, start game
+    if (room.players.length === 2) {
+      room.gameStatus = 'playing'
+      room.currentTurn = 'X'
+      room.rematchVotes = {}
+      console.log(`Game started in room ${roomId}`)
+    }
+
+    // Broadcast room update
+    broadcastRoomUpdate(roomId)
+  })
+
+  socket.on('makeMove', (data) => {
+    const { roomId, index } = data
+    const room = gameRooms.get(roomId)
+
+    if (!room) {
+      socket.emit('invalidMove', { reason: 'Room not found' })
+      return
+    }
+
+    // Validate move
+    if (room.gameStatus !== 'playing') {
+      socket.emit('invalidMove', { reason: 'Game is not active' })
+      return
+    }
+
+    if (room.currentTurn !== socket.data.symbol) {
+      socket.emit('invalidMove', { reason: 'Not your turn' })
+      return
+    }
+
+    if (index < 0 || index > 8) {
+      socket.emit('invalidMove', { reason: 'Invalid cell index' })
+      return
+    }
+
+    if (room.board[index] !== null) {
+      socket.emit('invalidMove', { reason: 'Cell already occupied' })
+      return
+    }
+
+    // Make the move
+    room.board[index] = socket.data.symbol
+
+    // Check for winner
+    const winner = checkWinner(room.board)
+    if (winner) {
+      room.gameStatus = 'ended'
+      room.winner = winner
+      console.log(`Game ended in room ${roomId}. Winner: ${winner}`)
+    }
+    // Check for draw
+    else if (isBoardFull(room.board)) {
+      room.gameStatus = 'ended'
+      room.winner = null
+      console.log(`Game ended in room ${roomId}. Draw!`)
+    }
+    // Switch turn
+    else {
+      room.currentTurn = room.currentTurn === 'X' ? 'O' : 'X'
+    }
+
+    broadcastRoomUpdate(roomId)
+  })
+
+  socket.on('requestRematch', (data) => {
+    const { roomId } = data
+    const room = gameRooms.get(roomId)
+
+    if (!room) return
+
+    // Record rematch vote
+    room.rematchVotes[socket.data.symbol] = true
+
+    // If both players voted, start new game
+    if (
+      room.rematchVotes['X'] === true &&
+      room.rematchVotes['O'] === true
+    ) {
+      // Alternate starting player
+      room.startingPlayer = room.startingPlayer === 'X' ? 'O' : 'X'
+      room.currentTurn = room.startingPlayer
+      room.board = Array(9).fill(null)
+      room.gameStatus = 'playing'
+      room.winner = null
+      room.rematchVotes = {}
+      console.log(`Rematch started in room ${roomId}`)
+    }
+
+    broadcastRoomUpdate(roomId)
+  })
+
+  socket.on('leaveRoom', (data) => {
+    const { roomId } = data
+    const room = gameRooms.get(roomId)
+
+    if (!room) return
+
+    // Remove player
+    room.players = room.players.filter((p) => p.socketId !== socket.id)
+
+    socket.leave(roomId)
+
+    // Notify remaining player
+    if (room.players.length > 0) {
+      io.to(roomId).emit('opponentLeft')
+      console.log(`Player ${socket.id} left room ${roomId}`)
+    }
+
+    // Cleanup empty room
+    cleanupEmptyRoom(roomId)
+
+    broadcastRoomUpdate(roomId)
+  })
+
+  socket.on('disconnect', () => {
+    console.log(`User disconnected: ${socket.id}`)
+
+    // If player was in a room, remove them
+    if (socket.data.roomId) {
+      const room = gameRooms.get(socket.data.roomId)
+      if (room) {
+        room.players = room.players.filter((p) => p.socketId !== socket.id)
+
+        if (room.players.length > 0) {
+          io.to(socket.data.roomId).emit('opponentLeft')
+        }
+
+        cleanupEmptyRoom(socket.data.roomId)
       }
     }
+  })
+})
 
-    emitRoomState(roomId);
-  });
-
-  socket.on("makeMove", ({ index }) => {
-    if (!activeRoomId) return;
-
-    const room = getRoom(activeRoomId);
-    const player = room.players.find(({ socketId }) => socketId === socket.id);
-
-    if (
-      !player ||
-      room.players.length < 2 ||
-      room.gameOver ||
-      player.symbol !== room.currentPlayer ||
-      !Number.isInteger(index) ||
-      index < 0 ||
-      index > 8 ||
-      room.board[index]
-    ) {
-      return;
-    }
-
-    room.board[index] = player.symbol;
-    const result = checkWinner(room.board);
-
-    if (result) {
-      room.gameOver = true;
-      room.winner = result;
-    } else {
-      room.currentPlayer = room.currentPlayer === "X" ? "O" : "X";
-    }
-
-    emitRoomState(activeRoomId);
-  });
-
-  socket.on("resetGame", () => {
-    if (!activeRoomId) return;
-
-    const room = getRoom(activeRoomId);
-    const isInRoom =
-      room.players.some(({ socketId }) => socketId === socket.id) ||
-      room.spectators.some(({ socketId }) => socketId === socket.id);
-
-    if (!isInRoom) return;
-
-    resetRoomGame(room);
-    emitRoomState(activeRoomId);
-  });
-
-  socket.on("disconnect", () => {
-    if (!activeRoomId) return;
-
-    const room = getRoom(activeRoomId);
-    removeSocketFromRoom(room, socket.id);
-
-    if (room.players.length === 0 && room.spectators.length === 0) {
-      rooms.delete(activeRoomId);
-      return;
-    }
-
-    emitRoomState(activeRoomId);
-  });
-});
-
+// Start server
 httpServer.listen(port, () => {
-  console.log(`Server listening at http://localhost:${port}`);
-});
+  console.log(`Tic Tac Toe server listening on port ${port}`)
+})
