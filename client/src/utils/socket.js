@@ -83,6 +83,7 @@ export function connectSocket(roomId, onConnectionChange) {
 
   // Start connecting only after all handlers are registered.
   localSocket.connect()
+}
 
 export function disconnectSocket() {
   if (socket) {
