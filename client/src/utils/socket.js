@@ -29,7 +29,7 @@ export function connectSocket(roomId, onConnectionChange) {
   // fire before their listeners are attached.
   const localSocket = io(serverUrl, {
     autoConnect: false,
-    transports: ["polling", "websocket"],
+    transports: ["websocket", "polling"],
     reconnection: true,
     reconnectionAttempts: 10,
     reconnectionDelay: 1000,
