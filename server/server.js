@@ -117,8 +117,14 @@ app.post('/token', async (req, res) => {
   })
 
   const data = await response.json()
-  res.json({ access_token: data.access_token })
-})
+    console.log('Discord token response:', data)
+    
+    if (!data.access_token) {
+      return res.status(400).json({ error: data })
+    }
+    
+    res.json({ access_token: data.access_token })
+  })
 
 // Socket.IO Events
 io.on('connection', (socket) => {
