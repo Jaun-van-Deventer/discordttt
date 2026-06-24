@@ -10,8 +10,14 @@ const app = express()
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: {
-    origin: "*",
-    methods: ['GET', 'POST'],
+    origin: [
+      "http://localhost:5173",
+      "https://*.discords.com",
+      "https://discord.com",
+      "https://*.discord.gg",
+    ],
+    methods: ["GET", "POST"],
+    credentials: true,
   },
 })
 
