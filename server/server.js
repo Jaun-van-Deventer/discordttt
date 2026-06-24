@@ -3,6 +3,7 @@ import { createServer } from 'http'
 import { Server } from 'socket.io'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import fetch from 'node-fetch'
 
 dotenv.config()
 
@@ -100,6 +101,24 @@ function cleanupEmptyRoom(roomId) {
 // Routes
 app.get('/', (req, res) => {
   res.send('Tic Tac Toe backend running')
+})
+
+app.post('/api/token', async (req, res) => {
+  const { code } = req.body
+  
+  const response = await fetch('https://discord.com/api/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID,
+      client_secret: process.env.DISCORD_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code,
+    }),
+  })
+
+  const data = await response.json()
+  res.json({ access_token: data.access_token })
 })
 
 // Socket.IO Events

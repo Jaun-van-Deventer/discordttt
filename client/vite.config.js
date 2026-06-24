@@ -9,12 +9,13 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: import.meta.env.VITE_SERVER_URL || 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
         ws: true,
       },
     },
+    '/server': import.meta.env.VITE_SERVER_URL || 'http://localhost:3001',
     hmr: {
       clientPort: 443,
     },
