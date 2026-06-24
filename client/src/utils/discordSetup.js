@@ -18,7 +18,7 @@ export async function initializeDiscordSDK() {
       scope: ['identify'],
     })
     
-    const response = await fetch('/api/token', {
+    const response = await fetch('/.proxy/api/token', {  // was '/api/token'
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),

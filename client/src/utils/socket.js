@@ -15,7 +15,7 @@ export function connectSocket(roomId, onConnectionChange) {
     socket = null
   }
 
-  const serverUrl = import.meta.env.VITE_SERVER_URL
+  const serverUrl = import.meta.env.VITE_SERVER_URL || `${window.location.origin}/.proxy/server`
   
   // Capture the socket in a local variable so that every event handler
   // always references THIS socket instance, not whatever socket happens
