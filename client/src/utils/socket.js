@@ -15,7 +15,7 @@ export function connectSocket(roomId, onConnectionChange) {
     socket = null
   }
 
-  const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001'
+  const serverUrl = import.meta.env.VITE_SERVER_URL
   
   // Capture the socket in a local variable so that every event handler
   // always references THIS socket instance, not whatever socket happens
@@ -29,10 +29,9 @@ export function connectSocket(roomId, onConnectionChange) {
   // fire before their listeners are attached.
   const localSocket = io(serverUrl, {
     autoConnect: false,
+    transports: ["websocket"],  
+    upgrade: false,              
     reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    reconnectionAttempts: 5,
   })
   socket = localSocket
   // Note: the module-level `socket` is kept in sync so that `getSocket()`
