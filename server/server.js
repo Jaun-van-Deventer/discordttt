@@ -110,6 +110,14 @@ io.on('connection', (socket) => {
       gameRooms.set(roomId, room)
     }
 
+    // Check if this socket is already in the room (e.g. duplicate joinRoom
+    // emitted on reconnect). If so, just broadcast the current state.
+    const alreadyJoined = room.players.some((p) => p.socketId === socket.id)
+    if (alreadyJoined) {
+      broadcastRoomUpdate(roomId)
+      return
+    }
+
     // Check if room is full
     if (room.players.length >= 2) {
       socket.emit('roomFull')
