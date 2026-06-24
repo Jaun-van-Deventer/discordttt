@@ -13,10 +13,7 @@ const io = new Server(httpServer, {
   path: '/.proxy/server/socket.io',
   cors: {
     origin: [
-      "http://localhost:5173",
-      "https://*.discords.com",
-      "https://discord.com",
-      "https://*.discord.gg",
+      "*",
     ],
     methods: ["GET", "POST"],
     credentials: true,
@@ -104,7 +101,7 @@ app.get('/', (req, res) => {
   res.send('Tic Tac Toe backend running')
 })
 
-app.post('/api/token', async (req, res) => {
+app.post('/token', async (req, res) => {
   const { code } = req.body
   
   const response = await fetch('https://discord.com/api/oauth2/token', {
