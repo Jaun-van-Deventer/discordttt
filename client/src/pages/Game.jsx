@@ -1,8 +1,4 @@
-// src/components/Game.jsx
-// Tic Tac Toe — Discord Activity | Game Page
-// ─────────────────────────────────────────────
-
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react'
 import {
   connectSocket,
   disconnectSocket,
@@ -15,136 +11,146 @@ import {
   makeMove,
   requestRematch,
   leaveRoom,
-} from '../socket';   // adjust path if needed
+} from '../utils/socket'
 
-/**
- * Props (unchanged from original):
- *  roomId  {string}
- *  onLeave {function}
- */
-export default function Game({ roomId, onLeave }) {
-  const [board,          setBoard]          = useState(Array(9).fill(null));
-  const [mySymbol,       setMySymbol]       = useState(null);
-  const [currentTurn,    setCurrentTurn]    = useState('X');
-  const [playerCount,    setPlayerCount]    = useState(1);
-  const [gameOver,       setGameOver]       = useState(false);
-  const [winner,         setWinner]         = useState(null);  // 'X' | 'O' | 'draw'
-  const [opponentLeft,   setOpponentLeft]   = useState(false);
-  const [roomFull,       setRoomFull]       = useState(false);
-  const [connectError,   setConnectError]   = useState(false);
-  const [errorMessage,   setErrorMessage]   = useState('');
-  const [rematchPending, setRematchPending] = useState(false);
+export default function Game({ roomId, user, onLeaveGame, onConnectionChange }) {
+  const [roomState, setRoomState] = useState(null)
+  const [playerSymbol, setPlayerSymbol] = useState(null)
+  const [roomFull, setRoomFull] = useState(false)
+  const [opponentLeft, setOpponentLeft] = useState(false)
+  const [errorMsg, setErrorMsg] = useState('')
+  const [connectError, setConnectError] = useState(false)
 
-  /* ── Socket setup ── */
   useEffect(() => {
-    connectSocket(roomId);
-
     onRoomUpdateListener((data) => {
-      setBoard(data.board ?? Array(9).fill(null));
-      setMySymbol(data.mySymbol ?? null);
-      setCurrentTurn(data.currentTurn ?? 'X');
-      setPlayerCount(data.playerCount ?? 1);
-      setGameOver(data.gameOver ?? false);
-      setWinner(data.winner ?? null);
-      setOpponentLeft(false);
-      setErrorMessage('');
-      if (data.gameOver) setRematchPending(false);
-    });
+      setRoomState(data)
+      if (data.players.length === 2) {
+        setOpponentLeft(false)
+      }
+      if (data.players[0]?.socketId === getSocket()?.id) {
+        setPlayerSymbol('X')
+      } else if (data.players[1]?.socketId === getSocket()?.id) {
+        setPlayerSymbol('O')
+      }
+    })
 
-    onInvalidMoveListener((msg) => {
-      setErrorMessage(msg || 'Invalid move!');
-    });
+    onInvalidMoveListener((reason) => {
+      setErrorMsg(reason)
+      setTimeout(() => setErrorMsg(''), 3000)
+    })
 
     onOpponentLeftListener(() => {
-      setOpponentLeft(true);
-      setGameOver(true);
-    });
+      setOpponentLeft(true)
+    })
 
     onRoomFullListener(() => {
-      setRoomFull(true);
-    });
+      setRoomFull(true)
+    })
 
     onConnectErrorListener(() => {
-      setConnectError(true);
-    });
+      setConnectError(true)
+    })
+
+    connectSocket(roomId, onConnectionChange)
 
     return () => {
-      disconnectSocket();
-    };
-  }, [roomId]);
+      disconnectSocket()
+    }
+  }, [roomId, onConnectionChange])
 
-  /* ── Handlers ── */
-  const handleCellClick = useCallback((index) => {
-    if (gameOver)              return;
-    if (board[index])          return;
-    if (currentTurn !== mySymbol) return;
-    if (playerCount < 2)       return;
-    makeMove(index);
-    setErrorMessage('');
-  }, [gameOver, board, currentTurn, mySymbol, playerCount]);
-
-  const handlePlayAgain = () => {
-    setRematchPending(true);
-    requestRematch();
-  };
-
-  const handleLeave = () => {
-    leaveRoom();
-    disconnectSocket();
-    if (onLeave) onLeave();
-  };
-
-  /* ── Derived UI state ── */
-  const isMyTurn = !gameOver && currentTurn === mySymbol && playerCount === 2;
-
-  const statusText = (() => {
-    if (opponentLeft)              return '😢 Opponent left the game';
-    if (winner === 'draw')         return "🤝 It's a draw!";
-    if (winner && winner === mySymbol)  return '🏆 You win!';
-    if (winner && winner !== mySymbol)  return '😞 You lose…';
-    if (playerCount < 2)           return 'Waiting for opponent…';
-    if (isMyTurn)                  return '⚡ Your turn!';
-    return "⏳ Opponent's turn…";
-  })();
-
-  const statusClass = (() => {
-    if (winner === mySymbol)  return 'win';
-    if (winner && winner !== mySymbol) return 'lose';
-    if (winner === 'draw')    return 'draw';
-    if (isMyTurn)             return 'your-turn';
-    return '';
-  })();
-
-  /* ── Early-exit screens ── */
-  if (connectError) {
-    return (
-      <div className="themed-page game-page">
-        <div className="bg-deco" aria-hidden="true" />
-        <div className="overlay-screen card" style={{ maxWidth:460 }}>
-          <div className="overlay-icon">⚠️</div>
-          <h2 className="overlay-title">Connection Error</h2>
-          <p className="overlay-msg">Could not connect to the game server. Please close and reopen the activity.</p>
-          <button className="btn btn-pink" onClick={handleLeave}>← Go Back</button>
-        </div>
-      </div>
-    );
+  function getGameStatus() {
+    if (opponentLeft) return '😢 Opponent left the game'
+    if (roomFull) return 'Room is full'
+    if (!roomState) return 'Joining game...'
+    if (roomState.gameStatus === 'waiting') return 'Waiting for opponent...'
+    if (roomState.gameStatus === 'playing') {
+      return roomState.currentTurn === playerSymbol ? '⚡ Your turn!' : "⏳ Opponent's turn…"
+    }
+    if (roomState.gameStatus === 'ended') {
+      if (roomState.winner === playerSymbol) return '🏆 You win!'
+      if (roomState.winner === null) return "🤝 It's a draw!"
+      return '😞 You lost…'
+    }
+    return ''
   }
 
+  function handleCellClick(index) {
+    if (roomFull || opponentLeft || !roomState || !playerSymbol) return
+    if (roomState.gameStatus !== 'playing') return
+    if (roomState.currentTurn !== playerSymbol) return
+    if (roomState.board[index] !== null) return
+    makeMove(roomId, index)
+  }
+
+  function handlePlayAgain() {
+    requestRematch(roomId)
+  }
+
+  function handleLeave() {
+    leaveRoom(roomId)
+    onLeaveGame()
+  }
+
+  // ── Early-exit: room full ──
   if (roomFull) {
     return (
       <div className="themed-page game-page">
         <div className="bg-deco" aria-hidden="true" />
-        <div className="overlay-screen card" style={{ maxWidth:460 }}>
+        <div className="overlay-screen card" style={{ maxWidth: 460 }}>
           <div className="overlay-icon">🚫</div>
           <h2 className="overlay-title">Room Full</h2>
-          <p className="overlay-msg">This room already has 2 players. Please start a new game.</p>
+          <p className="overlay-msg">This room already has 2 players. Please try joining a different room.</p>
           <button className="btn btn-pink" onClick={handleLeave}>← Go Back</button>
         </div>
       </div>
-    );
+    )
   }
 
-  /* ── Main game screen ── */
+  // ── Early-exit: connect error ──
+  if (connectError) {
+    return (
+      <div className="themed-page game-page">
+        <div className="bg-deco" aria-hidden="true" />
+        <div className="overlay-screen card" style={{ maxWidth: 460 }}>
+          <div className="overlay-icon">⚠️</div>
+          <h2 className="overlay-title">Connection Failed</h2>
+          <p className="overlay-msg">Could not connect to the game server. Please check your connection and try again.</p>
+          <button className="btn btn-pink" onClick={handleLeave}>← Go Back</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Early-exit: loading ──
+  if (!roomState) {
+    return (
+      <div className="themed-page game-page">
+        <div className="bg-deco" aria-hidden="true" />
+        <div className="overlay-screen">
+          <h1 className="game-title">
+            <span className="title-tic">TIC</span>{' '}
+            <span className="title-tac">TAC</span>{' '}
+            <span className="title-toe">TOE</span>
+            {' '}<span className="title-crown">👑</span>
+          </h1>
+          <div className="status-pill">
+            <span className="spinner" /> Joining game…
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const gameStatus = getGameStatus()
+  const canMove = !opponentLeft && playerSymbol === roomState.currentTurn && roomState.gameStatus === 'playing'
+  const gameEnded = roomState.gameStatus === 'ended'
+
+  const statusClass =
+    roomState.winner === playerSymbol                              ? 'win'      :
+    roomState.winner !== null && roomState.winner !== playerSymbol ? 'lose'     :
+    roomState.winner === null && gameEnded                         ? 'draw'     :
+    roomState.currentTurn === playerSymbol                         ? 'your-turn' : ''
+
   return (
     <div className="themed-page game-page">
       {/* Background */}
@@ -171,14 +177,14 @@ export default function Game({ roomId, onLeave }) {
       {/* X mascot */}
       <div className="mascot mascot-x" aria-hidden="true">
         <img src="/images/x-mascot.png" alt=""
-          onError={e => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling.style.display='block'; }} />
+          onError={e => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling.style.display='block' }} />
         <span className="mascot-fallback" style={{ display:'none' }}>✖️</span>
       </div>
 
       {/* O mascot */}
       <div className="mascot mascot-o" aria-hidden="true">
         <img src="/images/o-mascot.png" alt=""
-          onError={e => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling.style.display='block'; }} />
+          onError={e => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling.style.display='block' }} />
         <span className="mascot-fallback" style={{ display:'none' }}>⭕</span>
       </div>
 
@@ -186,88 +192,91 @@ export default function Game({ roomId, onLeave }) {
       <div className="content-shell">
 
         {/* Title */}
-        <h1 className="game-title" style={{ marginBottom:4 }}>
+        <h1 className="game-title">
           <span className="title-tic">TIC</span>{' '}
           <span className="title-tac">TAC</span>{' '}
           <span className="title-toe">TOE</span>
-          {' '}<span className="title-crown" role="img" aria-label="crown">👑</span>
+          {' '}<span className="title-crown">👑</span>
         </h1>
 
         {/* Info bar */}
         <div className="card game-info-bar">
           <div className="info-item">
             You are:&nbsp;
-            <span className={`info-val ${mySymbol === 'X' ? 'marker-x' : 'marker-o'}`}>
-              {mySymbol === 'X' ? '✖' : mySymbol === 'O' ? '●' : '…'}
+            <span className={`info-val ${playerSymbol === 'X' ? 'marker-x' : 'marker-o'}`}>
+              {playerSymbol === 'X' ? '✖' : playerSymbol === 'O' ? '●' : '…'}
             </span>
           </div>
           <div className="info-item">
             Players:&nbsp;
-            <span className="info-val" style={{ color: playerCount === 2 ? '#5effa0' : '#ffe77a' }}>
-              {playerCount}/2
+            <span className="info-val" style={{ color: roomState.players.length === 2 ? '#5effa0' : '#ffe77a' }}>
+              {roomState.players.length}/2
             </span>
           </div>
         </div>
 
         {/* Status pill */}
         <div className={`status-pill ${statusClass}`} role="status">
-          {statusText}
+          {gameStatus}
         </div>
 
         {/* Error message */}
-        {errorMessage && (
+        {errorMsg && (
           <div className="status-pill" style={{ borderColor:'#ff6eb3', color:'#ff6eb3', background:'rgba(80,0,30,0.7)' }}>
-            ⚠️ {errorMessage}
+            ⚠️ {errorMsg}
           </div>
         )}
 
         {/* Board */}
         <div className="board-wrapper">
           <div className="board-grid" role="grid" aria-label="Tic Tac Toe Board">
-            {board.map((cell, i) => {
-              const isTaken   = !!cell;
-              const isDisabled = gameOver || !isMyTurn || isTaken;
-              return (
-                <button
-                  key={i}
-                  className={[
-                    'cell',
-                    isTaken   ? 'taken'    : '',
-                    isDisabled ? 'disabled' : '',
-                    cell === 'X' ? 'cell-x' : '',
-                    cell === 'O' ? 'cell-o' : '',
-                  ].filter(Boolean).join(' ')}
-                  onClick={() => handleCellClick(i)}
-                  disabled={isDisabled}
-                  aria-label={cell ? `${cell} in cell ${i + 1}` : `Empty cell ${i + 1}`}
-                  role="gridcell"
-                >
-                  {cell === 'X' ? '✖' : cell === 'O' ? '●' : ''}
-                </button>
-              );
-            })}
+            {roomState.board.map((cell, index) => (
+              <button
+                key={index}
+                className={[
+                  'cell',
+                  cell ? 'taken' : '',
+                  (!canMove || cell !== null || opponentLeft) ? 'disabled' : '',
+                  cell === 'X' ? 'cell-x' : '',
+                  cell === 'O' ? 'cell-o' : '',
+                ].filter(Boolean).join(' ')}
+                onClick={() => handleCellClick(index)}
+                disabled={!canMove || cell !== null || opponentLeft}
+                aria-label={cell ? `${cell} in cell ${index + 1}` : `Empty cell ${index + 1}`}
+                role="gridcell"
+              >
+                {cell === 'X' ? '✖' : cell === 'O' ? '●' : ''}
+              </button>
+            ))}
           </div>
         </div>
 
         {/* Actions */}
         <div className="actions-row">
-          {gameOver && !rematchPending && (
-            <button className="btn btn-yellow btn-play-again" onClick={handlePlayAgain}>
-              🔄 Play Again
-            </button>
-          )}
-          {rematchPending && (
-            <div className="status-pill" style={{ borderColor:'#ffe77a', color:'#ffe77a' }}>
-              <span className="spinner" />
-              Waiting for opponent to rematch…
+          {opponentLeft && (
+            <div className="status-pill" style={{ borderColor:'#ff6eb3', color:'#ff6eb3' }}>
+              😢 Your opponent has left the game.
             </div>
           )}
+
+          {gameEnded && !opponentLeft && (
+            <button
+              className="btn btn-yellow btn-play-again"
+              onClick={handlePlayAgain}
+              disabled={roomState.rematchVotes?.[playerSymbol] === true}
+            >
+              {roomState.rematchVotes?.[playerSymbol] === true
+                ? <><span className="spinner" /> Waiting for opponent…</>
+                : '🔄 Play Again'}
+            </button>
+          )}
+
           <button className="btn btn-pink" onClick={handleLeave}>
             Leave Game
           </button>
         </div>
 
-      </div>{/* /content-shell */}
+      </div>
     </div>
-  );
+  )
 }
