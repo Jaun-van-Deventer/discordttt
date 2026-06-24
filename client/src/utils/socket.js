@@ -38,6 +38,7 @@ export function connectSocket(roomId, onConnectionChange) {
     reconnectionAttempts: 10,
     reconnectionDelay: 1000,
   })
+  socket = localSocket
   // Note: the module-level `socket` is kept in sync so that `getSocket()`
   // always returns the current active socket for callers that need its `.id`
   // (e.g. Game.jsx player-symbol detection). All event handler emissions use
