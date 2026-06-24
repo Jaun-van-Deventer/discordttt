@@ -31,6 +31,7 @@ export function connectSocket(roomId, onConnectionChange) {
   // starts connecting, ensuring no events (including connect_error) can
   // fire before their listeners are attached.
   const localSocket = io(serverUrl, {
+    path: socketPath,
     autoConnect: false,
     transports: ["websocket", "polling"],
     reconnection: true,
